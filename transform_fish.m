@@ -166,10 +166,26 @@ function fish_points = transform_fish(fish_points, bl_override)
                 continue;
             end
 
-            % Fit line through middle points in XY plane
-            coeffs = polyfit(x_mid, y_mid, 1);
-            b = coeffs(1);   % slope
-            a = coeffs(2);   % y-intercept
+            % Fit line through middle points in XY plane.
+            % CHANGE NOTE (performance, no result change): the degree-1
+            % least-squares line y = b*x + a is solved in closed form
+            % (normal equations) instead of polyfit's QR path. For the
+            % >= 2 middle points guaranteed by the fit_idx guard above the
+            % two are the same least-squares minimizer to machine
+            % precision; polyfit is kept only as the fallback for the
+            % degenerate all-equal-x case where the closed form is
+            % singular (vertical line).
+            xb = mean(x_mid); yb = mean(y_mid);
+            dx = x_mid - xb;
+            ssxx = sum(dx .* dx);
+            if ssxx <= eps
+                coeffs = polyfit(x_mid, y_mid, 1);
+                b = coeffs(1);   % slope
+                a = coeffs(2);   % y-intercept
+            else
+                b = sum(dx .* (y_mid - yb)) / ssxx;   % slope
+                a = yb - b * xb;                       % y-intercept
+            end
 
             % Rotation angle
             alpha = atan(b);

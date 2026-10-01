@@ -138,8 +138,19 @@ function ext = compute_body_extended(fish_points, fps, kine, roll_pair, flow_BL_
                 x_mid = squeeze(pts(f, fit_idx, 1));
                 y_mid = squeeze(pts(f, fit_idx, 2));
                 if any(isnan(x_mid)) || any(isnan(y_mid)), continue; end
-                b = polyfit(x_mid, y_mid, 1);
-                body_angle_deg(f) = atand(b(1));   % slope -> degrees, range (-90, 90]
+                % CHANGE NOTE (performance, no result change): closed-form
+                % degree-1 line slope in place of polyfit (same as
+                % transform_fish.m's line fit); polyfit kept only as the
+                % fallback for the degenerate vertical-line case.
+                xb = mean(x_mid); yb = mean(y_mid);
+                dx = x_mid - xb;
+                ssxx = sum(dx .* dx);
+                if ssxx <= eps
+                    b = polyfit(x_mid, y_mid, 1);
+                    body_angle_deg(f) = atand(b(1));   % slope -> degrees, range (-90, 90]
+                else
+                    body_angle_deg(f) = atand(sum(dx .* (y_mid - yb)) / ssxx);
+                end
             end
         end
 

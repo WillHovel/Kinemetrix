@@ -382,27 +382,36 @@ function [curv_mean, curv_std, maxCurv, maxCurvLoc] = ...
     curv_all = NaN(nFrames, N_OUT);
     lag      = max(1, round(N_OUT / 40));
 
+    % CHANGE NOTE (performance, no result change): the inner station loop
+    % below is vectorized over k (the three-point circumradius for every
+    % interior station at once). The arithmetic is identical to the old
+    % per-station loop — same point triplets (k-lag, k, k+lag), same
+    % Heron denom, same 1/(ABC/denom) curvature, and the same NaN for the
+    % lag edge stations and any denom<=0 (collinear) station, so the NaN
+    % pattern and every value are unchanged.
+    kk  = (lag+1 : N_OUT-lag);    % interior stations that receive a value
+    i_m = kk - lag;               % point before
+    i_p = kk + lag;               % point after
+
     for f = 1:nFrames
         x = X_i(f,:);  y = Y_i(f,:);
         if use3d, z = Z_i(f,:); else, z = zeros(size(x)); end
         if any(isnan(x)) || any(isnan(y)), continue; end
         if use3d && any(isnan(z)), continue; end
 
-        curv_row = NaN(1, N_OUT);
-        for k = lag+1 : N_OUT-lag
-            x1=x(k-lag); y1=y(k-lag); z1=z(k-lag);
-            x2=x(k);     y2=y(k);     z2=z(k);
-            x3=x(k+lag); y3=y(k+lag); z3=z(k+lag);
+        x1 = x(i_m); y1 = y(i_m); z1 = z(i_m);
+        x2 = x(kk);  y2 = y(kk);  z2 = z(kk);
+        x3 = x(i_p); y3 = y(i_p); z3 = z(i_p);
 
-            A = sqrt((x2-x1)^2+(y2-y1)^2+(z2-z1)^2);
-            B = sqrt((x3-x2)^2+(y3-y2)^2+(z3-z2)^2);
-            C = sqrt((x3-x1)^2+(y3-y1)^2+(z3-z1)^2);
-            s = (A+B+C)/2;
-            denom = 4*sqrt(max(s*(s-A)*(s-B)*(s-C), 0));
-            if denom > 0
-                curv_row(k) = 1 / ((A*B*C)/denom);
-            end
-        end
+        A = sqrt((x2-x1).*(x2-x1) + (y2-y1).*(y2-y1) + (z2-z1).*(z2-z1));
+        B = sqrt((x3-x2).*(x3-x2) + (y3-y2).*(y3-y2) + (z3-z2).*(z3-z2));
+        C = sqrt((x3-x1).*(x3-x1) + (y3-y1).*(y3-y1) + (z3-z1).*(z3-z1));
+        ss    = (A+B+C)/2;
+        denom = 4*sqrt(max(ss.*(ss-A).*(ss-B).*(ss-C), 0));
+
+        curv_row = NaN(1, N_OUT);
+        good = denom > 0;
+        curv_row(kk(good)) = 1 ./ ((A(good).*B(good).*C(good)) ./ denom(good));
         curv_all(f,:) = curv_row;
     end
 
@@ -653,7 +662,14 @@ function [wavelength, sf, power] = spatial_wavelength(Y_interp, s_norm, fs, f_do
     end
     rss_fun = @(k) complex_fit_rss(k, s_col, G_col, W, col_s);
     lam_scan = linspace(0.4, 4, 2001);
-    rss_scan = arrayfun(@(l) rss_fun(2*pi/l), lam_scan);
+    % CHANGE NOTE (performance, no result change): a plain loop over the
+    % wavelength scan in place of arrayfun — same rss_fun, same inputs,
+    % same order, so the min index i0 (and thus the fminbnd bracket) is
+    % identical, but without arrayfun's per-element dispatch overhead.
+    rss_scan = NaN(1, numel(lam_scan));
+    for li = 1:numel(lam_scan)
+        rss_scan(li) = rss_fun(2*pi/lam_scan(li));
+    end
     [~, i0]  = min(rss_scan);
     k_lo = 2*pi / lam_scan(min(numel(lam_scan), i0+2));
     k_hi = 2*pi / lam_scan(max(1, i0-2));
