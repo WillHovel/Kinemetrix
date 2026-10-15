@@ -341,14 +341,31 @@ function y_out = fft_interp(y_in, N_out)
         y_out = interp1(linspace(0,1,N_in), y_in, linspace(0,1,N_out), 'spline');
         return
     end
-    yp    = y_in(1:end-1);          % unique samples (drop duplicate at s=1)
+    % CHANGE NOTE (bug fix, tail-end spike): zero-padded FFT interpolation
+    % treats the samples as ONE PERIOD of a periodic signal, i.e. it
+    % implicitly wraps the tail back around to the head. A body midline is
+    % not periodic (y_tail ~= y_head), so the interpolant over the last
+    % segment bent toward y_head, and the appended raw tail sample then
+    % jumped back to y_tail: a one-station discontinuity of size
+    % |y_head - y_tail| at s = 1 (visible as a spike at the tail in the
+    % amplitude envelope, curvature profile, and midline plots). Fix:
+    % subtract the straight line joining the first and last samples, which
+    % makes the residual exactly periodic (zero at both ends), FFT-
+    % interpolate the residual, and add the line back. A signal that is
+    % already periodic (y_in(1) == y_in(end)) has a zero line, so that
+    % case is unchanged; the raw tail sample is still reproduced exactly.
+    t_in  = (0:N_in-1) / (N_in-1);
+    r_in  = y_in - (y_in(1) + (y_in(end) - y_in(1)) * t_in);   % r(1)=r(end)=0
+    yp    = r_in(1:end-1);          % unique samples (drop duplicate at s=1)
     N     = numel(yp);
     M     = N_out - 1;              % interpolate to unique output stations
     Y     = fft(yp);
     half  = floor(N / 2);
     Y_pad = [Y(1:half+1), zeros(1, M - N), Y(half+2:end)];
     yq    = real(ifft(Y_pad)) * (M / N);
-    y_out = [yq, y_in(end)];        % s=1 station: keep the raw sample
+    r_out = [yq, 0];                % residual is 0 at s=1
+    t_out = linspace(0, 1, N_out);
+    y_out = r_out + (y_in(1) + (y_in(end) - y_in(1)) * t_out);   % s=1 -> y_in(end) exactly
 end
 
 
