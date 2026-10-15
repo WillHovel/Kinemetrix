@@ -104,7 +104,8 @@ function kine = compute_kinematics(fish_points, fps, min_freq)
         % intact (a full-period wave has exactly zero spatial mean, so
         % nothing is lost). Done AFTER interpolation so the mean is
         % estimated on the fine grid, not the few raw points.
-        Y_interp = Y_interp - mean(Y_interp, 2, 'omitnan');
+        Y_sp_mean = mean(Y_interp, 2, 'omitnan');   % kept so the raw points can be shown in the same frame
+        Y_interp  = Y_interp - Y_sp_mean;
 
         % ----------------------------------------------------------------
         % 2.  Lateral (Y) amplitude envelope
@@ -258,6 +259,7 @@ function kine = compute_kinematics(fish_points, fps, min_freq)
         kine(fi).name             = fish_points(fi).name;
         kine(fi).X_interp         = X_interp;
         kine(fi).Y_interp         = Y_interp;
+        kine(fi).Y_pts            = Yc_raw - Y_sp_mean;   % tracked points in the SAME frame as Y_interp (display only)
         kine(fi).Z_interp         = Z_interp;
         kine(fi).s_norm           = s_norm;
         kine(fi).n_frames_with_data = n_frames_with_data;   % NEW: sanity-check field

@@ -61,6 +61,8 @@ function FishKinematicsApp()
     % CSV export state
     app.csv_rows = {};    % cell array of flat structs, one per exported analysis
     app.csv_path = '';    % last used output file path
+    app.layoutReady = false;   % set true once every tab exists (see layoutTabs)
+    app.sb = struct('axList',{},'drop',{},'chkX',{},'minX',{},'maxX',{},'chkY',{},'minY',{},'maxY',{},'panel',{});
 
     %% ---- Figure ----
     fig = uifigure('Name',     'Kinemetrix', ...
@@ -267,6 +269,21 @@ function FishKinematicsApp()
         'BackgroundColor', [0.97 0.97 0.97], 'Value', {''});
     y = y - 228;
 
+    % The canvas is laid out downward from y = 1100, so the last widgets
+    % ended up at NEGATIVE y, below the origin, where a scrollable panel
+    % cannot scroll to. Shift everything up so the lowest widget sits just
+    % above y = 0; then the scroll range covers the full content.
+    lp_ch = LP.Children;  lp_minB = inf;
+    for lp_i = 1:numel(lp_ch)
+        lp_p = lp_ch(lp_i).Position;  lp_minB = min(lp_minB, lp_p(2));
+    end
+    if isfinite(lp_minB)
+        for lp_i = 1:numel(lp_ch)
+            lp_p = lp_ch(lp_i).Position;  lp_p(2) = lp_p(2) + (10 - lp_minB);
+            lp_ch(lp_i).Position = lp_p;
+        end
+    end
+
     %% ================================================================
     %  RIGHT PANEL: Tabbed: Kinematics | Fin Analysis
     %% ================================================================
@@ -277,7 +294,7 @@ function FishKinematicsApp()
     tabKine = uitab(tg, 'Title', 'Kinematics');
 
     % Midline controls bar, anchored to top of kinematics tab
-    midCtrlPanel = uipanel(tabKine, 'Units', 'normalized', 'Position', [0 0.935 1 0.065], ...
+    midCtrlPanel = uipanel(tabKine, 'Units', 'pixels', 'Position', [1 1 900 46], ...
         'BackgroundColor', [0.93 0.95 1], 'BorderType', 'line', 'Title', '', ...
         'AutoResizeChildren', 'off');
     uilabel(midCtrlPanel, 'Text', 'Midlines shown:', ...
@@ -316,11 +333,14 @@ function FishKinematicsApp()
              'HorizontalAlignment','center','FontSize',12,'Color',[0.75 0.75 0.75]);
     end
 
+    app.sbKine = buildScaleBar(midCtrlPanel, app.ax, {'Midlines','Amplitude envelope','Curvature profile','Beat frequency spectra'});
+    raiseChildren(midCtrlPanel, app.sb(app.sbKine).panel, 38);
+
     % ---- Tab 2: Fin Analysis ----
     tabFin = uitab(tg, 'Title', 'Fin Analysis (3D)');
 
     % Fin point selector panel, anchored to top of fin tab
-    finSelPanel = uipanel(tabFin, 'Units', 'normalized', 'Position', [0 0.91 1 0.09], ...
+    finSelPanel = uipanel(tabFin, 'Units', 'pixels', 'Position', [1 1 900 72], ...
         'BackgroundColor', [0.97 1 0.97], 'BorderType', 'line', 'Title', 'Fin Point Selection', ...
         'AutoResizeChildren', 'off');
     uilabel(finSelPanel, 'Text', 'Root point:', ...
@@ -353,8 +373,8 @@ function FishKinematicsApp()
     % ---- Tab 3: Pectoral Fin Phase (Format D dual-camera) ----
     tabPect = uitab(tg, 'Title', 'Pectoral Phase (2D)');
 
-    pectInfoPanel = uipanel(tabPect, 'Units', 'normalized', ...
-        'Position', [0 0.93 1 0.06], ...
+    pectInfoPanel = uipanel(tabPect, 'Units', 'pixels', ...
+        'Position', [1 1 900 40], ...
         'BorderType', 'none', 'BackgroundColor', [0.95 0.95 0.95], ...
         'AutoResizeChildren', 'off');
     app.pectInfoLabel = uilabel(pectInfoPanel, 'Position', [8 2 862 32], ...
@@ -389,6 +409,9 @@ function FishKinematicsApp()
     text(app.pectAx(2), 0.5, 0.5, 'No data', 'Units','normalized', ...
          'HorizontalAlignment','center','FontSize',12,'Color',[0.75 0.75 0.75]);
 
+    app.sbPect = buildScaleBar(pectInfoPanel, app.pectAx, {'Fin signals','Cross-correlation'});
+    raiseChildren(pectInfoPanel, app.sb(app.sbPect).panel, 36);
+
     % Fin results text area, wrapped in a normalized uipanel so it resizes
     finResultsPanel = uipanel(tabFin, 'Units', 'normalized', ...
         'Position', [0 0.72 1 0.18], ...
@@ -418,6 +441,9 @@ function FishKinematicsApp()
         text(app.finAx(i), 0.5, 0.5, 'No data', 'Units','normalized', ...
              'HorizontalAlignment','center','FontSize',12,'Color',[0.75 0.75 0.75]);
     end
+
+    app.sbFin = buildScaleBar(finSelPanel, app.finAx, {'Pitch / Roll / Yaw','Tip distance','Tip XY trajectory'});
+    raiseChildren(finSelPanel, app.sb(app.sbFin).panel, 36);
 
     % Fin 3D vector axis (bottom-left large area)
     app.finAx3D = uiaxes(tabFin, 'Units', 'normalized', 'Position', [0.01 0.02 0.65 0.34], ...
@@ -453,8 +479,7 @@ function FishKinematicsApp()
         tw = fw - TG_X2 - MARGIN;       % usable tab inner width
         th = fh - 2*MARGIN - TAB_CHROME; % usable tab inner height
 
-        % Pectoral phase tab: info label (top 5%), results area (next 22%)
-
+        layoutTabs();
     end
 
     % Run once to settle layout at startup
@@ -468,17 +493,17 @@ function FishKinematicsApp()
     app.batchFiles = {};   % cell array of full file paths selected for batch
     app.fname_parse = struct('id','','speed',NaN,'bodylength',NaN);   % last filename-parsed values
 
-    batchInfoPanel = uipanel(tabBatch, 'Units', 'normalized', ...
-        'Position', [0 0.93 1 0.06], 'BorderType', 'none', ...
+    batchInfoPanel = uipanel(tabBatch, 'Units', 'pixels', ...
+        'Position', [1 1 900 46], 'BorderType', 'none', ...
         'BackgroundColor', [0.95 0.95 0.95], 'AutoResizeChildren', 'off');
-    uilabel(batchInfoPanel, 'Position', [8 2 1100 32], 'FontSize', 12, ...
+    batchInfoLbl = uilabel(batchInfoPanel, 'Position', [8 2 1100 40], 'FontSize', 12, ...
         'FontColor', [0.4 0.4 0.6], 'WordWrap', 'on', 'Text', ...
         ['Process many CSVs of the SAME format in one pass. Loads and computes only: ' ...
          'no plots are rendered per file (that would be far too slow for a large batch). ' ...
          'Results stage into the same CSV export you already use, so nothing else changes.']);
 
     % ---- Left column: file selection + options ----
-    batchLeftPanel = uipanel(tabBatch, 'Units', 'normalized', 'Position', [0 0 0.32 0.93], ...
+    batchLeftPanel = uipanel(tabBatch, 'Units', 'pixels', 'Position', [1 1 480 700], ...
         'BorderType', 'line', 'AutoResizeChildren', 'off');
 
     uibutton(batchLeftPanel, 'Text', 'Select Files...', 'Position', [12 830 160 30], ...
@@ -528,34 +553,36 @@ function FishKinematicsApp()
                     'exported to CSV). * = any text. Matches the filename WITHOUT the .csv ' ...
                     'extension. {speed} units come from the Flow Speed panel units dropdown; ' ...
                     'if not BL/s, {bodylength} (or the panel body length) is used for conversion.']);
-    uilabel(batchLeftPanel, 'Position', [12 352 356 28], 'FontSize', 9, 'WordWrap', 'on', ...
+    uilabel(batchLeftPanel, 'Position', [12 340 356 40], 'FontSize', 9, 'WordWrap', 'on', ...
         'FontColor', [0.5 0.5 0.5], 'Text', ...
         ['Matches the filename without the .csv extension. Example: pattern ' ...
          '"WSBS_*_{speed}BL*_{id}xyzpts" parses WSBS_Swalk_0.5BL.1_Shark02xyzpts.csv ' ...
          'as speed = 0.5, id = Shark02 (the * after BL absorbs the ".1" trial tag).']);
 
-    uilabel(batchLeftPanel, 'Position', [12 320 356 26], 'FontSize', 9, 'WordWrap', 'on', ...
+    uilabel(batchLeftPanel, 'Position', [12 304 356 34], 'FontSize', 9, 'WordWrap', 'on', ...
         'FontColor', [0.5 0.5 0.5], 'Text', ...
         ['FPS, Min Frequency, and Flow speed are taken from the Kinematics tab ' ...
          '(left panel), set those first.']);
 
-    app.batchRunButton = uibutton(batchLeftPanel, 'Text', 'Run Batch', 'Position', [12 280 160 34], ...
+    app.batchRunButton = uibutton(batchLeftPanel, 'Text', 'Run Batch', 'Position', [12 262 160 34], ...
         'FontSize', 12, 'BackgroundColor', [0.2 0.55 0.3], 'FontColor', [1 1 1], ...
         'ButtonPushedFcn', @(~,~) onRunBatch());
 
-    app.batchProgressLabel = uilabel(batchLeftPanel, 'Position', [12 250 356 24], ...
+    app.batchProgressLabel = uilabel(batchLeftPanel, 'Position', [12 232 356 24], ...
         'FontSize', 10, 'FontColor', [0.4 0.4 0.4], 'Text', '');
 
-    app.batchJumpFilter = uicheckbox(batchLeftPanel, 'Position', [12 222 210 22], 'FontSize', 10, ...
+    app.batchJumpFilter = uicheckbox(batchLeftPanel, 'Position', [12 204 210 22], 'FontSize', 10, ...
         'Text', 'Filter DLC tracking jumps', 'Value', false, ...
         'Tooltip', 'Same as the Kinematics tab checkbox, applied to every file in the batch.');
-    app.batchJumpThreshField = uieditfield(batchLeftPanel, 'numeric', 'Position', [228 222 50 22], ...
+    app.batchJumpThreshField = uieditfield(batchLeftPanel, 'numeric', 'Position', [228 204 50 22], ...
         'Value', 0.5, 'Limits', [0.05 5]);
-    uilabel(batchLeftPanel, 'Position', [282 222 44 22], 'FontSize', 10, 'FontColor', [0.5 0.5 0.5], ...
+    uilabel(batchLeftPanel, 'Position', [282 204 44 22], 'FontSize', 10, 'FontColor', [0.5 0.5 0.5], ...
         'Text', 'x BL');
 
+    captureLayout(batchLeftPanel);   % remembered so the column stays glued to the top edge
+
     % ---- Right column: scrolling log, one line per file ----
-    batchRightPanel = uipanel(tabBatch, 'Units', 'normalized', 'Position', [0.33 0 0.67 0.93], ...
+    batchRightPanel = uipanel(tabBatch, 'Units', 'pixels', 'Position', [490 1 700 700], ...
         'BorderType', 'line', 'AutoResizeChildren', 'off');
     app.batchLogArea = uitextarea(batchRightPanel, 'Position', [0 0 400 200], ...
         'Editable', 'off', 'FontSize', 10, 'FontName', 'Courier New', 'Value', {'(no batch run yet)'});
@@ -568,18 +595,18 @@ function FishKinematicsApp()
     %% ================================================================
     app.tabSchool = uitab(tg, 'Title', 'School Metrics');
 
-    schoolInfoPanel = uipanel(app.tabSchool, 'Units', 'normalized', ...
-        'Position', [0 0.93 1 0.06], 'BorderType', 'none', ...
+    schoolInfoPanel = uipanel(app.tabSchool, 'Units', 'pixels', ...
+        'Position', [1 1 900 46], 'BorderType', 'none', ...
         'BackgroundColor', [0.95 0.95 0.95], 'AutoResizeChildren', 'off');
-    uilabel(schoolInfoPanel, 'Position', [8 2 1200 32], 'FontSize', 12, ...
+    schoolInfoLbl = uilabel(schoolInfoPanel, 'Position', [8 2 1200 40], 'FontSize', 12, ...
         'FontColor', [0.4 0.4 0.6], 'WordWrap', 'on', 'Text', ...
         ['Group-level metrics across ALL fish in one multi-animal file (native DLC multi-animal ' ...
          'exports or Fish1_P1_x, Fish2_P1_x, ... columns). These use RAW (untransformed) ' ...
          'coordinates on purpose, school-level angle and distance only make sense in one shared ' ...
          'coordinate frame, not each fish''s own private one.']);
 
-    schoolLeftPanel = uipanel(app.tabSchool, 'Units', 'normalized', 'Position', [0 0 0.32 0.93], ...
-        'BorderType', 'line', 'AutoResizeChildren', 'off', 'Scrollable', 'on');
+    schoolLeftPanel = uipanel(app.tabSchool, 'Units', 'pixels', 'Position', [1 1 480 700], ...
+        'BorderType', 'line', 'AutoResizeChildren', 'off');
 
     uilabel(schoolLeftPanel, 'Position', [12 850 356 20], 'FontSize', 10, 'FontWeight', 'bold', ...
         'Text', 'Multi-fish CSV file:');
@@ -629,7 +656,9 @@ function FishKinematicsApp()
         'Editable', 'off', 'FontSize', 10, 'FontName', 'Courier New', ...
         'Value', {'(run School Metrics to see results)'});
 
-    schoolRightPanel = uipanel(app.tabSchool, 'Units', 'normalized', 'Position', [0.33 0 0.67 0.93], ...
+    captureLayout(schoolLeftPanel);
+
+    schoolRightPanel = uipanel(app.tabSchool, 'Units', 'pixels', 'Position', [490 1 700 700], ...
         'BorderType', 'line', 'AutoResizeChildren', 'off');
     app.schoolPolAx = uiaxes(schoolRightPanel, 'Units', 'normalized', 'Position', [0.05 0.55 0.9 0.4]);
     title(app.schoolPolAx, 'Polarization over time');
@@ -637,6 +666,273 @@ function FishKinematicsApp()
     app.schoolDistAx = uiaxes(schoolRightPanel, 'Units', 'normalized', 'Position', [0.05 0.05 0.9 0.4]);
     title(app.schoolDistAx, 'Mean nearest-neighbor distance over time');
     xlabel(app.schoolDistAx, 'Frame'); ylabel(app.schoolDistAx, 'Distance');
+    app.sbSchool = buildScaleBar(schoolRightPanel, [app.schoolPolAx app.schoolDistAx], {'Polarization','Nearest-neighbor distance'});
+
+    % Everything exists now: enable and run the tab layout
+    app.layoutReady = true;
+    layoutTabs();
+    try, scroll(LP, 'top'); catch, end   %#ok<NOCOMMA>
+
+
+    %% ================================================================
+    %  AXIS SCALING (auto limits + per-axes manual override)
+    %% ================================================================
+    % Every analysis plot ends with applyScale(ax, autoXlim, autoYlim). The
+    % auto limits are computed by the plot code; if the user has switched an
+    % axis to manual in the "Axis scale" bar, their numbers win. The state
+    % lives in ax.UserData so it survives cla() and re-analysis.
+
+    function st = scaleState(ax)
+        st = ax.UserData;
+        if ~isstruct(st) || ~isfield(st, 'autoX')
+            st = struct('autoX',true, 'autoY',true, 'xl',[0 1], 'yl',[0 1], 'axl',[], 'ayl',[]);
+            ax.UserData = st;
+        end
+    end
+
+    function ok = validLim(lim_v)
+        ok = isnumeric(lim_v) && numel(lim_v) == 2 && all(isfinite(lim_v)) && lim_v(2) > lim_v(1);
+    end
+
+    function applyScale(ax, axl, ayl)
+        st = scaleState(ax);
+        st.axl = axl;  st.ayl = ayl;
+        ax.UserData = st;
+        setLims(ax, st);
+        refreshScaleBars(ax);
+    end
+
+    function setLims(ax, st)
+        if st.autoX || ~validLim(st.xl), lim_x = st.axl; else, lim_x = st.xl; end
+        if validLim(lim_x), xlim(ax, lim_x); else, xlim(ax, 'auto'); end
+        if st.autoY || ~validLim(st.yl), lim_y = st.ayl; else, lim_y = st.yl; end
+        if validLim(lim_y), ylim(ax, lim_y); else, ylim(ax, 'auto'); end
+    end
+
+    % [min max] of a vector, or [] when it is empty/degenerate (-> MATLAB auto)
+    function lim_r = rangeLim(v)
+        v = v(isfinite(v));
+        if isempty(v) || max(v) <= min(v), lim_r = []; else, lim_r = [min(v) max(v)]; end
+    end
+
+    % Data range plus a fractional pad. incl0 = always include zero (and sit
+    % exactly on 0 when all data is >= 0).
+    function lim_p = padLim(v, frac, incl0)
+        v = v(isfinite(v));
+        if isempty(v), lim_p = []; return; end
+        pl_lo = min(v);  pl_hi = max(v);
+        if incl0, pl_lo = min(pl_lo, 0); pl_hi = max(pl_hi, 0); end
+        if pl_hi <= pl_lo, pl_hi = pl_lo + 1; end
+        pl_pad = frac * (pl_hi - pl_lo);
+        pl_lo2 = pl_lo - pl_pad;
+        if incl0 && pl_lo == 0, pl_lo2 = 0; end
+        lim_p = [pl_lo2, pl_hi + pl_pad];
+    end
+
+    % Like padLim but the upper/lower bound is the q-quantile of the data, so
+    % isolated spikes clip instead of flattening everything else.
+    function lim_p = robustLim(v_hi, v_lo, q, frac)
+        pl_h = sort(v_hi(isfinite(v_hi)));
+        if isempty(pl_h), lim_p = []; return; end
+        pl_hi = pl_h(max(1, ceil(q * numel(pl_h))));
+        pl_l  = sort(v_lo(isfinite(v_lo)));
+        pl_lo = 0;
+        if ~isempty(pl_l), pl_lo = min(0, pl_l(min(numel(pl_l), floor((1-q)*numel(pl_l)) + 1))); end
+        if pl_hi <= pl_lo, pl_hi = pl_lo + 1; end
+        pl_pad = frac * (pl_hi - pl_lo);
+        lim_p = [pl_lo - pl_pad*(pl_lo < 0), pl_hi + pl_pad];
+    end
+
+    function sb_k = buildScaleBar(parent, axList, names)
+        sb_p = uipanel(parent, 'Units','pixels', 'Position',[1 1 800 34], 'BorderType','line', ...
+            'BackgroundColor',[0.97 0.97 0.92], 'AutoResizeChildren','off');
+        sb_k = numel(app.sb) + 1;
+        uilabel(sb_p, 'Text','Axis scale:', 'Position',[8 6 66 22], 'FontSize',11, 'FontWeight','bold');
+        sb_d = uidropdown(sb_p, 'Position',[76 6 170 22], 'Items',names, ...
+            'ItemsData',1:numel(names), 'FontSize',10, ...
+            'ValueChangedFcn', @(~,~) sbSelect(sb_k));
+        uilabel(sb_p, 'Text','X', 'Position',[256 6 12 22], 'FontSize',11, 'FontWeight','bold');
+        sb_cx = uicheckbox(sb_p, 'Text','Auto', 'Position',[270 7 52 20], 'Value',true, 'FontSize',10, ...
+            'ValueChangedFcn', @(~,~) sbEdit(sb_k));
+        sb_x1 = uieditfield(sb_p, 'numeric', 'Position',[324 6 62 22], 'FontSize',10, ...
+            'ValueDisplayFormat','%.4g', 'ValueChangedFcn', @(~,~) sbEditField(sb_k,'x'));
+        uilabel(sb_p, 'Text','to', 'Position',[389 6 14 22], 'FontSize',10);
+        sb_x2 = uieditfield(sb_p, 'numeric', 'Position',[404 6 62 22], 'FontSize',10, ...
+            'ValueDisplayFormat','%.4g', 'ValueChangedFcn', @(~,~) sbEditField(sb_k,'x'));
+        uilabel(sb_p, 'Text','Y', 'Position',[484 6 12 22], 'FontSize',11, 'FontWeight','bold');
+        sb_cy = uicheckbox(sb_p, 'Text','Auto', 'Position',[498 7 52 20], 'Value',true, 'FontSize',10, ...
+            'ValueChangedFcn', @(~,~) sbEdit(sb_k));
+        sb_y1 = uieditfield(sb_p, 'numeric', 'Position',[552 6 62 22], 'FontSize',10, ...
+            'ValueDisplayFormat','%.4g', 'ValueChangedFcn', @(~,~) sbEditField(sb_k,'y'));
+        uilabel(sb_p, 'Text','to', 'Position',[617 6 14 22], 'FontSize',10);
+        sb_y2 = uieditfield(sb_p, 'numeric', 'Position',[632 6 62 22], 'FontSize',10, ...
+            'ValueDisplayFormat','%.4g', 'ValueChangedFcn', @(~,~) sbEditField(sb_k,'y'));
+        uibutton(sb_p, 'Text','Reset', 'Position',[708 5 64 24], 'FontSize',10, ...
+            'Tooltip','Back to auto limits on both axes (also undoes mouse zoom/pan).', ...
+            'ButtonPushedFcn', @(~,~) sbReset(sb_k));
+        app.sb(sb_k) = struct('axList',axList, 'drop',sb_d, 'chkX',sb_cx, 'minX',sb_x1, 'maxX',sb_x2, ...
+                              'chkY',sb_cy, 'minY',sb_y1, 'maxY',sb_y2, 'panel',sb_p);
+        for sb_i = 1:numel(axList), scaleState(axList(sb_i)); end
+        sbSelect(sb_k);
+    end
+
+    % Load the selected axes' current state into the bar's fields
+    function sbSelect(sb_k)
+        sb_b  = app.sb(sb_k);
+        sb_ax = sb_b.axList(sb_b.drop.Value);
+        sb_st = scaleState(sb_ax);
+        sb_b.chkX.Value = sb_st.autoX;   sb_b.chkY.Value = sb_st.autoY;
+        sb_xl = xlim(sb_ax);   sb_yl = ylim(sb_ax);
+        if ~sb_st.autoX && validLim(sb_st.xl), sb_xl = sb_st.xl; end
+        if ~sb_st.autoY && validLim(sb_st.yl), sb_yl = sb_st.yl; end
+        sb_b.minX.Value = sb_xl(1);  sb_b.maxX.Value = sb_xl(2);
+        sb_b.minY.Value = sb_yl(1);  sb_b.maxY.Value = sb_yl(2);
+    end
+
+    % A field was typed into: that axis switches to manual
+    function sbEditField(sb_k, which)
+        if which == 'x', app.sb(sb_k).chkX.Value = false; else, app.sb(sb_k).chkY.Value = false; end
+        sbEdit(sb_k);
+    end
+
+    function sbEdit(sb_k)
+        sb_b  = app.sb(sb_k);
+        sb_ax = sb_b.axList(sb_b.drop.Value);
+        sb_st = scaleState(sb_ax);
+        sb_st.autoX = sb_b.chkX.Value;   sb_st.autoY = sb_b.chkY.Value;
+        if ~sb_st.autoX
+            sb_l = [sb_b.minX.Value sb_b.maxX.Value];
+            if validLim(sb_l), sb_st.xl = sb_l; else, sb_st.autoX = true; end   % min >= max: ignore
+        end
+        if ~sb_st.autoY
+            sb_l = [sb_b.minY.Value sb_b.maxY.Value];
+            if validLim(sb_l), sb_st.yl = sb_l; else, sb_st.autoY = true; end
+        end
+        sb_ax.UserData = sb_st;
+        setLims(sb_ax, sb_st);
+        sbSelect(sb_k);
+    end
+
+    function sbReset(sb_k)
+        sb_b  = app.sb(sb_k);
+        sb_ax = sb_b.axList(sb_b.drop.Value);
+        sb_st = scaleState(sb_ax);
+        sb_st.autoX = true;  sb_st.autoY = true;
+        sb_ax.UserData = sb_st;
+        setLims(sb_ax, sb_st);
+        sbSelect(sb_k);
+    end
+
+    function refreshScaleBars(ax)
+        for sb_i = 1:numel(app.sb)
+            sb_b = app.sb(sb_i);
+            if sb_b.axList(sb_b.drop.Value) == ax, sbSelect(sb_i); end
+        end
+    end
+
+    %% ================================================================
+    %  TAB LAYOUT (pixel-anchored bars at the top, plots fill the rest)
+    %% ================================================================
+    % Lift every child of pnl except the scale-bar panel dy px, making room
+    % for the scale bar along the bottom of the same container.
+    function raiseChildren(pnl, skipPanel, dy)
+        rc_ch = pnl.Children;
+        for rc_i = 1:numel(rc_ch)
+            if rc_ch(rc_i) ~= skipPanel
+                rc_p = rc_ch(rc_i).Position;  rc_p(2) = rc_p(2) + dy;
+                rc_ch(rc_i).Position = rc_p;
+            end
+        end
+    end
+
+    function captureLayout(pnl)
+        cl_ch = pnl.Children;  cl_y = zeros(numel(cl_ch), 1);  cl_top = -inf;
+        for cl_i = 1:numel(cl_ch)
+            cl_p = cl_ch(cl_i).Position;
+            cl_y(cl_i) = cl_p(2);
+            cl_top = max(cl_top, cl_p(2) + cl_p(4));
+        end
+        pnl.UserData = struct('chs', {cl_ch}, 'by', cl_y, 'topm', cl_top);
+    end
+
+    % Keep a column's widgets glued to the panel's top edge when it resizes
+    function reflowTop(pnl)
+        rt_u = pnl.UserData;
+        rt_sh = pnl.Position(4) - 10 - rt_u.topm;
+        for rt_i = 1:numel(rt_u.chs)
+            if isvalid(rt_u.chs(rt_i))
+                rt_p = rt_u.chs(rt_i).Position;
+                rt_p(2) = rt_u.by(rt_i) + rt_sh;
+                rt_u.chs(rt_i).Position = rt_p;
+            end
+        end
+    end
+
+    function layoutTabs()
+        if ~app.layoutReady, return; end
+        lt_strip = 34;                                   % tab-label strip
+        lt_w = max(400, tg.Position(3) - 4);
+        lt_h = max(300, tg.Position(4) - lt_strip);
+        lt_sb = 34;                                      % scale bar height
+        lt_g = 0.004;                                    % normalized gutter
+
+        % ---- Kinematics: control bar + scale bar, 2x2 plots below ----
+        lt_bar = 46 + lt_sb;                             % controls row + scale bar row
+        midCtrlPanel.Position = [1 lt_h-lt_bar lt_w lt_bar];
+        app.sb(app.sbKine).panel.Position = [1 1 max(50, lt_w-4) lt_sb];
+        lt_R = (lt_h - lt_bar - 4) / lt_h;
+        lt_hh = lt_R/2 - 2*lt_g;
+        set(app.ax(1), 'Position', [0.004 lt_R/2+lt_g 0.495 lt_hh]);
+        set(app.ax(2), 'Position', [0.502 lt_R/2+lt_g 0.495 lt_hh]);
+        set(app.ax(3), 'Position', [0.004 lt_g 0.495 lt_hh]);
+        set(app.ax(4), 'Position', [0.502 lt_g 0.495 lt_hh]);
+
+        % ---- Fin analysis: results sit beside the plots, not above them ----
+        lt_bar = 72 + lt_sb;
+        finSelPanel.Position = [1 lt_h-lt_bar lt_w lt_bar];
+        app.sb(app.sbFin).panel.Position = [1 1 max(50, lt_w-6) lt_sb];
+        lt_R = (lt_h - lt_bar - 4) / lt_h;
+        lt_hh = lt_R/2 - 2*lt_g;
+        set(app.finAx(1), 'Position', [0.004 lt_R/2+lt_g 0.655 lt_hh]);
+        set(app.finAx3D,  'Position', [0.004 lt_g 0.655 lt_hh]);
+        finResultsPanel.Position = [0.665 0.60*lt_R+lt_g 0.331 0.40*lt_R-2*lt_g];
+        set(app.finAx(2), 'Position', [0.665 0.30*lt_R+lt_g 0.331 0.30*lt_R-2*lt_g]);
+        set(app.finAx(3), 'Position', [0.665 lt_g 0.331 0.30*lt_R-2*lt_g]);
+
+        % ---- Pectoral phase: plots left, results right ----
+        lt_bar = 40 + lt_sb;
+        pectInfoPanel.Position = [1 lt_h-lt_bar lt_w lt_bar];
+        app.pectInfoLabel.Position = [8 2+36 max(100, lt_w-16) 34];
+        app.sb(app.sbPect).panel.Position = [1 1 max(50, lt_w-4) lt_sb];
+        lt_R = (lt_h - lt_bar - 4) / lt_h;
+        lt_hh = lt_R/2 - 2*lt_g;
+        set(app.pectAx(1), 'Position', [0.004 lt_R/2+lt_g 0.69 lt_hh]);
+        set(app.pectAx(2), 'Position', [0.004 lt_g 0.69 lt_hh]);
+        pectResultPanel.Position = [0.70 lt_g 0.296 lt_R-2*lt_g];
+
+        % ---- Batch: info bar, then two columns filling the height ----
+        lt_bar = 46;
+        batchInfoPanel.Position = [1 lt_h-lt_bar lt_w lt_bar];
+        batchInfoLbl.Position   = [8 2 max(100, lt_w-16) 40];
+        lt_cw = round(0.32 * lt_w);
+        batchLeftPanel.Position  = [1 1 lt_cw lt_h-lt_bar-2];
+        batchRightPanel.Position = [lt_cw+4 1 max(50, lt_w-lt_cw-6) lt_h-lt_bar-2];
+        reflowTop(batchLeftPanel);
+
+        % ---- School metrics ----
+        schoolInfoPanel.Position = [1 lt_h-lt_bar lt_w lt_bar];
+        schoolInfoLbl.Position   = [8 2 max(100, lt_w-16) 40];
+        schoolLeftPanel.Position  = [1 1 lt_cw lt_h-lt_bar-2];
+        lt_rh = lt_h-lt_bar-2;
+        schoolRightPanel.Position = [lt_cw+4 1 max(50, lt_w-lt_cw-6) lt_rh];
+        reflowTop(schoolLeftPanel);
+        lt_btnB = app.schoolRunButton.Position(2);        % results box fills the rest
+        app.schoolResultsArea.Position = [12 10 356 max(60, lt_btnB - 20)];
+        app.sb(app.sbSchool).panel.Position = [1 lt_rh-lt_sb max(50, lt_w-lt_cw-8) lt_sb];
+        lt_R = (lt_rh - lt_sb - 6) / lt_rh;
+        set(app.schoolPolAx,  'Position', [0.02 lt_R/2+lt_g 0.96 lt_R/2-2*lt_g]);
+        set(app.schoolDistAx, 'Position', [0.02 lt_g 0.96 lt_R/2-2*lt_g]);
+    end
 
     %% ================================================================
     %  CALLBACKS
@@ -988,7 +1284,7 @@ function FishKinematicsApp()
 
                 case 'named'
                     if numel(app.sel_order) < 3
-                        uialert(fig, 'Select at least 3 points (head, middle(s), tail).', 'Points'); return
+                        uialert(fig, 'Select at least 3 points (head, middle(s), tail).', 'Points'); setStatus('Select at least 3 points.'); return
                     end
                     app.fp = load_fish_points_named(csvPath, app.sel_order, []);
                     app.fp = app.fp(1);
@@ -1035,7 +1331,7 @@ function FishKinematicsApp()
                     % Fall through to transform + kinematics below
 
                 otherwise
-                    uialert(fig, 'Unknown format, browse a file first.', 'Format'); return
+                    uialert(fig, 'Unknown format, browse a file first.', 'Format'); setStatus('Browse a file first.'); return
             end
         catch ME; logFullError(ME); uialert(fig, ME.message, 'Load error'); setStatus('Load failed.'); return; end
 
@@ -1229,31 +1525,45 @@ function FishKinematicsApp()
         drawMidlines(k, fp);
 
         % -- Plot 2: Amplitude envelope --
+        % Band/marker handles are hidden from the legend (HandleVisibility
+        % off) so it lists only the named curves, not data1..data4.
         cla(app.ax(2)); hold(app.ax(2),'on');
         s = k.s_norm;
-        fill(app.ax(2), [s fliplr(s)], [k.amp_mean+k.amp_std fliplr(k.amp_mean-k.amp_std)], ...
-             [0.6 0.8 1], 'EdgeColor','none','FaceAlpha',0.4);
+        a_lo = k.amp_mean - k.amp_std;   a_hi = k.amp_mean + k.amp_std;
+        fill(app.ax(2), [s fliplr(s)], [a_hi fliplr(a_lo)], ...
+             [0.6 0.8 1], 'EdgeColor','none','FaceAlpha',0.4, 'HandleVisibility','off');
         plot(app.ax(2), s, k.amp_mean, 'b-', 'LineWidth', 2, 'DisplayName','Y amp');
+        vals2 = [a_lo(:); a_hi(:)];
         if has_z && ~isempty(k.ampZ_mean)
             fill(app.ax(2), [s fliplr(s)], [k.ampZ_mean+k.ampZ_std fliplr(k.ampZ_mean-k.ampZ_std)], ...
-                 [1 0.75 0.6], 'EdgeColor','none','FaceAlpha',0.3);
+                 [1 0.75 0.6], 'EdgeColor','none','FaceAlpha',0.3, 'HandleVisibility','off');
             plot(app.ax(2), s, k.ampZ_mean, 'r-', 'LineWidth', 2, 'DisplayName','Z amp');
+            vals2 = [vals2; k.ampZ_mean(:)+k.ampZ_std(:); k.ampZ_mean(:)-k.ampZ_std(:)];
         end
-        xline(app.ax(2), k.minAmpLoc, 'b:'); xline(app.ax(2), k.maxAmpLoc, 'b--');
+        xline(app.ax(2), k.minAmpLoc, 'b:',  'HandleVisibility','off');
+        xline(app.ax(2), k.maxAmpLoc, 'b--', 'HandleVisibility','off');
         legend(app.ax(2), 'Location','northwest','FontSize',9);
-        hold(app.ax(2),'off'); xlim(app.ax(2),[0 1]);
+        hold(app.ax(2),'off');
+        applyScale(app.ax(2), [0 1], padLim(vals2, 0.08, true));
 
         % -- Plot 3: Curvature --
         cla(app.ax(3)); hold(app.ax(3),'on');
-        fill(app.ax(3), [s fliplr(s)], [k.curv_mean+k.curv_std fliplr(k.curv_mean-k.curv_std)], ...
-             [1 0.8 0.7], 'EdgeColor','none','FaceAlpha',0.4);
+        c_lo = k.curv_mean - k.curv_std;   c_hi = k.curv_mean + k.curv_std;
+        fill(app.ax(3), [s fliplr(s)], [c_hi fliplr(c_lo)], ...
+             [1 0.8 0.7], 'EdgeColor','none','FaceAlpha',0.4, 'HandleVisibility','off');
         plot(app.ax(3), s, k.curv_mean, 'r-', 'LineWidth', 2, 'DisplayName','XY curv');
+        vals3 = [c_hi(:); k.curv_mean(:)];
         if has_z && ~isempty(k.curv3d_mean)
             plot(app.ax(3), s, k.curv3d_mean, 'm--', 'LineWidth', 1.5, 'DisplayName','3D curv');
+            vals3 = [vals3; k.curv3d_mean(:)];
         end
-        xline(app.ax(3), k.maxCurvLoc, 'k--');
+        xline(app.ax(3), k.maxCurvLoc, 'k--', 'HandleVisibility','off');
         legend(app.ax(3), 'Location','northwest','FontSize',9);
-        hold(app.ax(3),'off'); xlim(app.ax(3),[0 1]);
+        hold(app.ax(3),'off');
+        % Robust auto-range: the top 2% of values (end-of-body spikes, 3D
+        % head blow-up) are allowed to clip so they cannot flatten the
+        % real profile. Use the Axis scale bar to show everything.
+        applyScale(app.ax(3), [0 1], robustLim(vals3, c_lo(:), 0.98, 0.10));
 
         % -- Plot 4: FFT spectra --
         % NOTE: Unclean FFT spectra are expected: they reflect real broadband
@@ -1268,15 +1578,27 @@ function FishKinematicsApp()
              'DisplayName', sprintf('Tail Y (%.2fHz)', k.tail_TBF));
         minFreq = app.minFreqField.Value;
         xline(app.ax(4), minFreq,     'k:', 'LineWidth',1, ...
-              'Label', sprintf('min %.1fHz',minFreq));
-        xline(app.ax(4), k.head_TBF, 'b--', 'LineWidth',1);
-        xline(app.ax(4), k.tail_TBF, 'r--', 'LineWidth',1);
+              'Label', sprintf('min %.1fHz',minFreq), 'HandleVisibility','off');
+        xline(app.ax(4), k.head_TBF, 'b--', 'LineWidth',1, 'HandleVisibility','off');
+        xline(app.ax(4), k.tail_TBF, 'r--', 'LineWidth',1, 'HandleVisibility','off');
         if isfield(k,'spline_freq_Hz') && isfinite(k.spline_freq_Hz)
             xline(app.ax(4), k.spline_freq_Hz, 'g--', 'LineWidth',1, ...
-                  'Label', 'spline');
+                  'Label', 'spline', 'HandleVisibility','off');
         end
         legend(app.ax(4),'Location','northeast','FontSize',9);
         hold(app.ax(4),'off');
+        % Auto-range: zoom to the beat band (about 6x the dominant TBF, at
+        % least 5 Hz, never past the data) instead of the full Nyquist range.
+        f_all  = [k.head_fft_freq(:); k.tail_fft_freq(:)];
+        f_top  = max(f_all(isfinite(f_all)));
+        f_tbf  = max([k.head_TBF k.tail_TBF]);
+        if isempty(f_top), f_top = 1; end
+        if isfinite(f_tbf) && f_tbf > 0, f_x = max(5, 6*f_tbf); else, f_x = 10; end
+        f_x = min(f_x, f_top);
+        pw_in = [k.head_fft_power(k.head_fft_freq <= f_x); k.tail_fft_power(k.tail_fft_freq <= f_x)];
+        pw_in = pw_in(isfinite(pw_in));
+        if isempty(pw_in) || max(pw_in) <= 0, pw_y = [0 1]; else, pw_y = [0 1.1*max(pw_in)]; end
+        applyScale(app.ax(4), [0 f_x], pw_y);
     end
 
     % ---- Draw midlines (called on fish select AND on control change) ----
@@ -1325,7 +1647,15 @@ function FishKinematicsApp()
 
         % Raw measured points at middle valid frame
         mf = valid(round(end/2));
-        scatter(app.ax(1), fp.X(mf,:), fp.Y(mf,:), 50, 'r', 'filled', ...
+        % Plot the points in the same Y frame as the curves (world-frame
+        % displacement minus the per-frame spatial mean), not the raw
+        % body-axis-relative Y, which sits in a different frame.
+        if isfield(k, 'Y_pts') && ~isempty(k.Y_pts)
+            pts_y = k.Y_pts(mf,:);
+        else
+            pts_y = fp.Y(mf,:);
+        end
+        scatter(app.ax(1), fp.X(mf,:), pts_y, 50, 'r', 'filled', ...
                 'DisplayName', 'Tracked points (mid frame)', 'HandleVisibility', 'on');
 
         % Colorbar: frame number maps to time
@@ -1335,20 +1665,18 @@ function FishKinematicsApp()
         cb.FontSize = 8;
         clim(app.ax(1), [valid(idx_show(1)), valid(idx_show(end))]);
 
-        % X axis: fixed 0 (head) to 1 (tail) in BL: fish is stationary so
-        % body length is normalized. Slight padding reveals head/tail markers.
-        xlim(app.ax(1), [-0.05, 1.10]);
-
-        % Y axis: symmetric about 0, minimum ±1 BL, expands if data exceeds that.
-        % This ensures consistent scale across formats and animals.
-        all_y = k.Y_interp(~isnan(k.Y_interp));
-        if ~isempty(all_y)
-            y_extent = max(abs(all_y));
-            y_lim    = max(y_extent * 1.20, 1.0);   % at least ±1 BL, 20% pad beyond data
-        else
+        % Auto limits: X is fixed 0 (head) to 1 (tail) in BL with a little
+        % padding for the head/tail markers. Y is symmetric about 0 and sized
+        % to the midlines actually drawn (+15%), so small undulations are not
+        % squashed into a thin band by a fixed +/-1 BL window.
+        yy_shown = k.Y_interp(valid(idx_show), :);
+        yy_shown = yy_shown(isfinite(yy_shown));
+        if isempty(yy_shown)
             y_lim = 1.0;
+        else
+            y_lim = max(max(abs(yy_shown)) * 1.15, 0.02);
         end
-        ylim(app.ax(1), [-y_lim, y_lim]);
+        applyScale(app.ax(1), [-0.05, 1.10], [-y_lim, y_lim]);
 
         hold(app.ax(1),'off');
         xlabel(app.ax(1), 'Body position  (BL,  0 = head  →  1 = tail)');
@@ -1481,12 +1809,15 @@ function FishKinematicsApp()
         xlabel(app.finAx(1),'Frame'); ylabel(app.finAx(1),'Angle (deg)');
         title(app.finAx(1),'Pitch / Yaw / Roll over time','FontSize',10);
         hold(app.finAx(1),'off');
+        fa_p = fd.pitch(valid);  fa_y = fd.yaw(valid);  fa_r = fd.roll(valid);
+        applyScale(app.finAx(1), rangeLim(frames(valid)), padLim([fa_p(:); fa_y(:); fa_r(:)], 0.08, false));
 
         % ---- Plot 2: Cumulative distance ----
         cla(app.finAx(2));
         plot(app.finAx(2), frames(valid), fd.cum_dist(valid), 'Color',[0.1 0.55 0.3], 'LineWidth',1.8);
         xlabel(app.finAx(2),'Frame'); ylabel(app.finAx(2),'Cumulative distance');
         title(app.finAx(2), sprintf('Tip distance (total = %.3f)', fd.total_dist), 'FontSize',10);
+        applyScale(app.finAx(2), rangeLim(frames(valid)), padLim(fd.cum_dist(valid), 0.05, true));
 
         % ---- Plot 3: Tip trajectory in XY, connected line colored by frame ----
         cla(app.finAx(3));
@@ -1511,6 +1842,7 @@ function FishKinematicsApp()
         xlabel(app.finAx(3),'X'); ylabel(app.finAx(3),'Y');
         title(app.finAx(3),'Tip XY trajectory (colored by frame)','FontSize',10);
         hold(app.finAx(3),'off');
+        applyScale(app.finAx(3), padLim(tv(:,1), 0.08, false), padLim(tv(:,2), 0.08, false));
 
         % ---- Plot 4: 3D tip trajectory ----
         cla(app.finAx3D);
@@ -1764,8 +2096,9 @@ function FishKinematicsApp()
 
         % ---- Plots (lightweight, single line each) ----
         plot(app.schoolPolAx, pol.polarization, 'LineWidth', 1.2);
-        ylim(app.schoolPolAx, [0 1]);
         plot(app.schoolDistAx, dist.mean_nn_dist, 'LineWidth', 1.2);
+        applyScale(app.schoolPolAx,  rangeLim(1:numel(pol.polarization)), [0 1]);
+        applyScale(app.schoolDistAx, rangeLim(1:numel(dist.mean_nn_dist)), padLim(dist.mean_nn_dist(:), 0.10, true));
 
         % ---- Stage CSV rows ----
         collect_polarization_row(pol, snoutName, peduncleName, flowAxisDeg, numel(fp));
@@ -2185,6 +2518,7 @@ function FishKinematicsApp()
         xlabel(app.pectAx(1), 'Frame');
         ylabel(app.pectAx(1), 'Y position (pixels)');
         hold(app.pectAx(1), 'off');
+        applyScale(app.pectAx(1), rangeLim(frames), padLim([pr.sig_right(:); pr.sig_left(:)], 0.08, false));
 
         % ---- Plot 2: Cross-correlation ----
         cla(app.pectAx(2));
@@ -2203,6 +2537,7 @@ function FishKinematicsApp()
         xlabel(app.pectAx(2), 'Lag (frames, positive = left lags right)');
         ylabel(app.pectAx(2), 'Normalized cross-correlation');
         hold(app.pectAx(2), 'off');
+        applyScale(app.pectAx(2), rangeLim(lags), padLim([cc(:); 0], 0.10, false));
     end
 
     %% ================================================================
